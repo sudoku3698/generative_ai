@@ -215,14 +215,27 @@ if "xml_df" in st.session_state:
             st.bar_chart(value_counts.set_index(value_counts.columns[0]))
 
     # Column filters
+    #
+    # Resets happen in on_click callbacks, which run before the script reruns,
+    # so the new value is in place when the widget is drawn. Popping the key
+    # and calling st.rerun() did not reliably reset the widget.
+    #
+    # Options come from the full df, not from the rows left by earlier filters.
+    # Narrowed options changed every time an earlier filter changed, and
+    # Streamlit then reset the later widgets - so clearing one filter wiped
+    # the others too.
+    def reset_filter(key, value):
+        st.session_state[key] = value
+
+    def clear_all_filters():
+        for key in [k for k in st.session_state if str(k).startswith("filter_widget_")]:
+            del st.session_state[key]
+        st.session_state["sidebar_filter_columns"] = []
+
     with st.sidebar:
         st.header("Filters")
 
-        if st.button("Clear all filters"):
-            for col in df.columns:
-                st.session_state.pop(f"filter_widget_{col}", None)
-            st.session_state["sidebar_filter_columns"] = []
-            st.rerun()
+        st.button("Clear all filters", on_click=clear_all_filters)
 
         filter_columns = st.multiselect(
             "Filter by column", df.columns, key="sidebar_filter_columns"
@@ -232,27 +245,29 @@ if "xml_df" in st.session_state:
         for col in filter_columns:
             widget_key = f"filter_widget_{col}"
 
-            if pd.api.types.is_numeric_dtype(filtered_df[col]):
-                if filtered_df[col].dropna().empty:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                if df[col].dropna().empty:
                     continue
-                min_val, max_val = float(filtered_df[col].min()), float(filtered_df[col].max())
+                min_val, max_val = float(df[col].min()), float(df[col].max())
                 if min_val == max_val:
                     st.write(f"{col}: {min_val}")
                     continue
-                selected_range = st.slider(
-                    col, min_val, max_val, (min_val, max_val), key=widget_key
-                )
+                default = (min_val, max_val)
+                st.session_state.setdefault(widget_key, default)
+                selected_range = st.slider(col, min_val, max_val, key=widget_key)
                 filtered_df = filtered_df[filtered_df[col].between(*selected_range)]
             else:
-                options = sorted(filtered_df[col].dropna().astype(str).unique().tolist())
-                selected_values = st.multiselect(
-                    col, options, default=options, key=widget_key
-                )
+                default = sorted(df[col].dropna().astype(str).unique().tolist())
+                st.session_state.setdefault(widget_key, default)
+                selected_values = st.multiselect(col, default, key=widget_key)
                 filtered_df = filtered_df[filtered_df[col].astype(str).isin(selected_values)]
 
-            if st.button(f"Clear '{col}' filter", key=f"clear_{col}"):
-                st.session_state.pop(widget_key, None)
-                st.rerun()
+            st.button(
+                f"Clear '{col}' filter",
+                key=f"clear_{col}",
+                on_click=reset_filter,
+                args=(widget_key, default),
+            )
 
             st.divider()
 
